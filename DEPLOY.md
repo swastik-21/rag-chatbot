@@ -33,11 +33,16 @@ docker run -p 8080:8080 -e OPENAI_API_KEY="your-api-key" shopilots-chatbot
 4. Set environment variable: `heroku config:set OPENAI_API_KEY="your-api-key"`
 5. Push: `git push heroku main`
 
-## Railway Deployment
+## Railway Deployment (Recommended)
 
-1. Connect your GitHub repository to Railway
-2. Set environment variable `OPENAI_API_KEY` in Railway dashboard
-3. Deploy automatically on push
+1. Go to https://railway.app and sign in with GitHub
+2. Click "New Project" → "Deploy from GitHub repo"
+3. Select `swastik-21/rag-chatbot` repository
+4. Railway will automatically detect Python and deploy
+5. In Railway dashboard, go to Variables tab and add:
+   - `OPENAI_API_KEY` = your OpenAI API key
+   - `PORT` = 8080 (optional, Railway auto-assigns)
+6. Your app will be deployed automatically on every push to main branch
 
 ## Environment Variables
 
