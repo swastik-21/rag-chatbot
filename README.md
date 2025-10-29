@@ -14,45 +14,27 @@ export OPENAI_API_KEY="your-api-key"
 poetry install
 ```
 
-3. Activate virtual environment:
-```bash
-source .venv/bin/activate
-```
-
-4. Start the chatbot:
+3. Start the chatbot:
 ```bash
 ./start_chatbot.sh
 ```
 
-5. Open http://localhost:8080 in your browser
+4. Open http://localhost:8080 in your browser
 
-## API Usage
+## Deployment
 
-Streaming endpoint:
-```bash
-curl -X POST http://localhost:8080/api/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What products do you offer?"}'
-```
+### Render
 
-Non-streaming endpoint:
-```bash
-curl -X POST http://localhost:8080/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What products do you offer?"}'
-```
+1. Go to https://dashboard.render.com
+2. New + → Web Service
+3. Connect repository: `swastik-21/rag-chatbot`
+4. Build Command: `pip install -r requirements.txt`
+5. Start Command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+6. Add environment variable: `OPENAI_API_KEY`
+7. Deploy
 
 ## Files
 
-- `app.py` - FastAPI application with web interface
-- `chatbot/` - Core RAG pipeline
+- `app.py` - FastAPI application
+- `chatbot/` - RAG pipeline
 - `docs/shopilots_site/` - Website data
-- `start_chatbot.sh` - Startup script
-- `scripts/scrape_shopilots.py` - Web scraper for updating data
-
-## Rebuilding Index
-
-To rebuild the vector database from documents:
-```bash
-python chatbot/memory_builder.py
-```
