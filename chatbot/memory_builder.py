@@ -64,6 +64,17 @@ def build_memory_index(docs_path: Path, vector_store_path: str, chunk_size: int,
     logger.info("Creating memory index...")
     embedding = Embedder()
     vector_database = Chroma(persist_directory=str(vector_store_path), embedding=embedding)
+    
+    # Clear existing collection to avoid duplicates
+    logger.info("Clearing existing collection...")
+    try:
+        existing_results = vector_database.collection.get()
+        if len(existing_results["ids"]) > 0:
+            vector_database.collection.delete(ids=existing_results["ids"])
+            logger.info(f"Deleted {len(existing_results['ids'])} existing documents")
+    except Exception as e:
+        logger.warning(f"Could not clear existing collection: {e}")
+    
     vector_database.from_chunks(chunks)
     logger.info("Memory Index has been created successfully!")
 
@@ -90,7 +101,8 @@ def get_args() -> argparse.Namespace:
 
 def main(parameters):
     root_folder = Path(__file__).resolve().parent.parent
-    doc_path = root_folder / "docs"
+    # Only load from shopilots_site directory to ensure only website data
+    doc_path = root_folder / "docs" / "shopilots_site"
     vector_store_path = root_folder / "vector_store" / "docs_index"
 
     build_memory_index(
