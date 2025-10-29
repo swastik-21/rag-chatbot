@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,6 +7,8 @@ import sys
 import traceback
 import json
 from typing import Optional, List
+import asyncio
+import httpx
 
 sys.path.insert(0, str(Path(__file__).parent / "chatbot"))
 
@@ -197,10 +199,34 @@ def format_response(docs: List, query: str) -> str:
     
     return content[:400] + "..." if len(content) > 400 else content
 
+async def keep_alive_ping():
+    """Keep service alive by pinging health endpoint every 5 minutes"""
+    await asyncio.sleep(60)
+    
+    port = os.getenv("PORT", "8080")
+    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{port}"
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            try:
+                await asyncio.sleep(300)
+                if not base_url.startswith("http://localhost"):
+                    await client.get(f"{base_url}/health")
+                else:
+                    await client.get(f"http://127.0.0.1:{port}/health")
+            except Exception:
+                pass
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to keep service alive"""
+    return {"status": "ok", "service": "shopilots-chatbot"}
+
 @app.on_event("startup")
 async def startup_event():
     global components_loaded
     initialize_components()
+    asyncio.create_task(keep_alive_ping())
 
 @app.get("/")
 async def read_root():
