@@ -164,7 +164,9 @@ cython_debug/
 
 # Project specific
 models/
-*.sqlite3
 .DS_Store
 .env.local
 .env.*.local
+
+# Allow vector_store sqlite files for deployment
+!vector_store/**/*.sqlite3
