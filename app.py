@@ -201,21 +201,31 @@ def format_response(docs: List, query: str) -> str:
 
 async def keep_alive_ping():
     """Keep service alive by pinging health endpoint every 5 minutes"""
-    await asyncio.sleep(60)
+    await asyncio.sleep(60)  # Initial delay
     
     port = os.getenv("PORT", "8080")
-    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN") or os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{port}"
+    # Try external URL first (for Render/Railway), fallback to localhost
+    external_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    local_url = f"http://127.0.0.1:{port}"
     
     async with httpx.AsyncClient(timeout=10.0) as client:
         while True:
             try:
-                await asyncio.sleep(300)
-                if not base_url.startswith("http://localhost"):
-                    await client.get(f"{base_url}/health")
+                await asyncio.sleep(300)  # 5 minutes between pings
+                # Try external URL if available, otherwise use localhost
+                if external_url:
+                    try:
+                        await client.get(f"{external_url}/health")
+                        print(f"Keep-alive ping successful to {external_url}/health")
+                    except Exception as e:
+                        # Fallback to localhost if external ping fails
+                        print(f"External ping failed: {e}, trying localhost")
+                        await client.get(f"{local_url}/health")
                 else:
-                    await client.get(f"http://127.0.0.1:{port}/health")
-            except Exception:
-                pass
+                    await client.get(f"{local_url}/health")
+                    print(f"Keep-alive ping successful to {local_url}/health")
+            except Exception as e:
+                print(f"Keep-alive ping failed: {e}")
 
 @app.get("/health")
 async def health_check():
