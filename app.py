@@ -277,7 +277,7 @@ async def read_root():
         </div>
         <div class="chat-area" id="chatArea">
             <div class="message assistant">
-                <div class="message-content">Hello! I can help you with questions about Shopilots products, platforms, and services.</div>
+                <div class="message-content">Hello! I'm Shopilots Assistant. I can help you with questions about Shopilots products, platforms, and services.</div>
             </div>
         </div>
         <div class="input-area">
@@ -449,7 +449,7 @@ async def generate_streaming_response(question: str, docs: list):
     
     context_text = "\n\n".join([doc.page_content for doc in docs[:3]])
     
-    system_prompt = """You are a knowledgeable customer service representative for Shopilots, an AI-powered e-commerce sales platform.
+    system_prompt = """You are Shopilots Assistant, a helpful AI assistant for Shopilots, an AI-powered e-commerce sales platform. When introducing yourself, say "I am Shopilots Assistant" or "I'm Shopilots Assistant".
 
 Your task is to provide accurate, helpful, and complete answers based ONLY on the context provided below.
 
@@ -577,7 +577,7 @@ async def chat(request: ChatRequest):
                 # Create enhanced prompt with system instructions
                 context_text = "\n\n".join([doc.page_content for doc in docs[:3]])
                 
-                enhanced_prompt = f"""You are a knowledgeable customer service representative for Shopilots, an AI-powered e-commerce sales platform.
+                enhanced_prompt = f"""You are Shopilots Assistant, a helpful AI assistant for Shopilots, an AI-powered e-commerce sales platform. When introducing yourself, say "I am Shopilots Assistant" or "I'm Shopilots Assistant".
 
 Your task is to provide accurate, helpful, and complete answers based ONLY on the context provided below.
 
