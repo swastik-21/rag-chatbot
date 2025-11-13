@@ -696,29 +696,38 @@ Provide a clear, complete answer based on the context above:"""
     
     try:
         if use_openai and openai_client:
-            stream = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                stream=True,
-                temperature=0.7,
-                max_tokens=500
-            )
-            
-            for chunk in stream:
-                try:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta = chunk.choices[0].delta
-                        if delta and hasattr(delta, 'content') and delta.content:
-                            token = delta.content
-                            yield f"data: {json.dumps({'token': token})}\n\n"
-                except Exception:
-                    continue
-            
-            yield "data: [DONE]\n\n"
-            return
+            try:
+                stream = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    stream=True,
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                
+                for chunk in stream:
+                    try:
+                        if chunk.choices and len(chunk.choices) > 0:
+                            delta = chunk.choices[0].delta
+                            if delta and hasattr(delta, 'content') and delta.content:
+                                token = delta.content
+                                yield f"data: {json.dumps({'token': token})}\n\n"
+                    except Exception:
+                        continue
+                
+                yield "data: [DONE]\n\n"
+                return
+            except Exception as openai_error:
+                # Fallback to format_response if OpenAI fails
+                print(f"OpenAI API error: {openai_error}, falling back to format_response")
+                answer = format_response(docs, question)
+                for i in range(0, len(answer), 5):
+                    yield f"data: {json.dumps({'token': answer[i:i+5]})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
         
         # Fallback to local LLM
         if llm:
@@ -795,8 +804,8 @@ async def chat_stream_post(request: ChatRequest):
             model_used = "openai" if use_openai else "llama-3.2-3b"
             
             try:
-                # generate_streaming_response is a regular generator, not async
-                for chunk in generate_streaming_response(request.question, docs):
+                # generate_streaming_response is an async generator
+                async for chunk in generate_streaming_response(request.question, docs):
                     if chunk.startswith('data: '):
                         data = chunk[6:].strip()
                         if data and data != '[DONE]':
