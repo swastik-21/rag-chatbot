@@ -16,9 +16,15 @@ class Embedder:
         is_cloud = _os.getenv("RENDER") or _os.getenv("RAILWAY_ENVIRONMENT") or _os.getenv("RENDER_EXTERNAL_URL")
         
         if is_cloud:
-            # Use CPU only and disable progress bars to save memory
+            # Use CPU only to save memory
             kwargs.setdefault("device", "cpu")
-            kwargs.setdefault("model_kwargs", {"low_cpu_mem_usage": True})
+            # Only use low_cpu_mem_usage if accelerate is available
+            try:
+                import accelerate
+                kwargs.setdefault("model_kwargs", {"low_cpu_mem_usage": True})
+            except ImportError:
+                # accelerate not available, skip low_cpu_mem_usage
+                pass
         
         self.client = sentence_transformers.SentenceTransformer(model_name, cache_folder=cache_folder, **kwargs)
 

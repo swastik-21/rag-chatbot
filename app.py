@@ -72,6 +72,12 @@ def initialize_components():
     is_cloud = os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER_EXTERNAL_URL")
     
     try:
+        # Check if vector store path exists
+        if not vector_store_path.exists():
+            print(f"WARNING: Vector store path does not exist: {vector_store_path}")
+            print("Creating directory...")
+            vector_store_path.mkdir(parents=True, exist_ok=True)
+        
         # Initialize ChromaDB first (lighter)
         # We'll load the embedding model lazily if needed, but for now load it
         # since we need it for queries
@@ -83,10 +89,18 @@ def initialize_components():
         if is_cloud:
             gc.collect()
         
-        print("Initializing vector database...")
+        print(f"Initializing vector database at: {vector_store_path}")
         # Initialize ChromaDB with memory optimizations
         index = Chroma(persist_directory=str(vector_store_path), embedding=embedding)
         print("Vector database initialized")
+        
+        # Verify index is working
+        try:
+            test_results = index.collection.get(limit=1)
+            print(f"Vector database verified: {len(test_results.get('ids', []))} documents found")
+        except Exception as e:
+            print(f"WARNING: Vector database verification failed: {e}")
+            print("Database may be empty, but continuing...")
         
         # Force garbage collection after loading vector database
         if is_cloud:
@@ -131,7 +145,12 @@ def initialize_components():
         
         return True
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error initializing components: {e}")
+        import traceback
+        traceback.print_exc()
+        # Ensure index is None on failure
+        index = None
+        components_loaded = False
         return False
 
 def get_chat_history(session_id: str) -> ChatHistory:
