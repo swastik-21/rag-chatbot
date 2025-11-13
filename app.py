@@ -9,6 +9,7 @@ import json
 from typing import Optional, List
 import asyncio
 import httpx
+import time
 
 sys.path.insert(0, str(Path(__file__).parent / "chatbot"))
 
@@ -19,8 +20,10 @@ from bot.conversation.chat_history import ChatHistory
 from bot.conversation.conversation_handler import answer_with_context, refine_question
 from bot.conversation.ctx_strategy import get_ctx_synthesis_strategy
 from bot.model.model_registry import Model, get_model_settings
+from helpers.analytics import analytics_tracker, ConversationEvent
 import os
 from openai import OpenAI
+from datetime import datetime
 
 app = FastAPI(title="Shopilots Chatbot")
 
@@ -55,10 +58,14 @@ def initialize_components():
     model_folder = root_folder / "models"
     vector_store_path = root_folder / "vector_store" / "docs_index"
     
+    # Check if we're on Render or Railway (cloud deployment)
+    is_cloud = os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER_EXTERNAL_URL")
+    
     try:
         embedding = Embedder()
         index = Chroma(persist_directory=str(vector_store_path), embedding=embedding)
         
+        # Always prioritize OpenAI on cloud deployments to save memory
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key:
             try:
@@ -68,8 +75,20 @@ def initialize_components():
                 print("Using OpenAI API")
                 return True
             except Exception as e:
-                print(f"OpenAI init failed: {e}, falling back to local model")
+                print(f"OpenAI init failed: {e}")
+                if is_cloud:
+                    print("On cloud deployment - OpenAI is required. Please set OPENAI_API_KEY.")
+                    components_loaded = False
+                    return False
         
+        # Only load local model if not on cloud and OpenAI is not available
+        if is_cloud:
+            print("On cloud deployment - local model not supported due to memory constraints.")
+            print("Please set OPENAI_API_KEY environment variable.")
+            components_loaded = False
+            return False
+        
+        # Local development: try to load local model
         try:
             model_name = Model.LLAMA_3_2_three.value
             model_settings = get_model_settings(model_name)
@@ -79,7 +98,8 @@ def initialize_components():
             components_loaded = True
             use_openai = False
             print("Using local LLM (Llama 3.2 3B)")
-        except Exception:
+        except Exception as e:
+            print(f"Local model init failed: {e}")
             components_loaded = False
         
         return True
@@ -91,6 +111,34 @@ def get_chat_history(session_id: str) -> ChatHistory:
     if session_id not in chat_histories:
         chat_histories[session_id] = ChatHistory(total_length=6)
     return chat_histories[session_id]
+
+def detect_product_category(question: str, answer: str = "") -> Optional[str]:
+    """Detect product category from question or answer"""
+    text = (question + " " + answer).lower()
+    
+    # AI Sales Agents
+    if "website agent" in text:
+        return "Website Agent"
+    if "social media agent" in text:
+        return "Social Media Agent"
+    if "messenger agent" in text:
+        return "Messenger Agent"
+    if "call agent" in text:
+        return "Call Agent"
+    if "gpt store" in text or "chatgpt" in text:
+        return "GPT Store"
+    
+    # Industry Solutions
+    if "electronics" in text or ("tech" in text and "agent" not in text) or "gaming" in text:
+        return "Electronics & Tech"
+    if "fashion" in text or "apparel" in text or "clothing" in text:
+        return "Fashion & Apparel"
+    if "home" in text or "garden" in text or "bedding" in text or "decor" in text:
+        return "Home & Garden"
+    if "agency" in text or ("partner" in text and "agent" not in text) or "white-label" in text:
+        return "Agencies & Partners"
+    
+    return None
 
 def retrieve_docs(query: str, k: int = 5):
     results = []
@@ -153,10 +201,11 @@ def format_response(docs: List, query: str) -> str:
     query_lower = query.lower()
     all_text = " ".join([doc.page_content for doc in docs[:3]]).lower()
     
-    # Extract products
-    if any(word in query_lower for word in ["product", "offer", "provide", "what do you", "services"]):
+    # Extract AI Sales Agents (Products)
+    if any(word in query_lower for word in ["product", "offer", "provide", "what do you", "services", "agent", "sales agent"]):
         products = []
         
+        # AI Sales Agents
         if "website agent" in all_text:
             products.append("• Website Agent - Embed on your e-commerce site. Deploy conversational salesforce that sell — not just chat.")
         if "social media agent" in all_text:
@@ -165,31 +214,90 @@ def format_response(docs: List, query: str) -> str:
             products.append("• Messenger Agent - Chat on WhatsApp & Messenger. Handle customer inquiries and drive sales through messaging platforms.")
         if "call agent" in all_text:
             products.append("• Call Agent - Handle customer phone calls with AI voice capabilities.")
-        if "gpt store" in all_text:
+        if "gpt store" in all_text or "chatgpt" in all_text:
             products.append("• GPT Store - Launch in ChatGPT & GPT Store. Create a custom GPT shopping assistant.")
         
+        # Industry Solutions
+        if "electronics" in all_text or "tech" in all_text or "gaming" in all_text:
+            products.append("• Electronics & Tech - Help customers navigate complex tech specs and find the perfect device. Results: +53% conversion rate, +41% AOV")
+        if "fashion" in all_text or "apparel" in all_text or "clothing" in all_text:
+            products.append("• Fashion & Apparel - Provide personalized styling advice and size recommendations. Results: +49% conversion rate, +32% AOV")
+        if "home" in all_text or "garden" in all_text or "bedding" in all_text or "decor" in all_text:
+            products.append("• Home & Garden - Guide customers through home improvement and decor decisions. Results: +47% conversion rate, +38% AOV")
+        if "agency" in all_text or "partner" in all_text or "white-label" in all_text:
+            products.append("• Agencies & Partners - White-label solutions for agencies serving multiple retail clients.")
+        
         if products:
-            return "Shopilots offers the following AI Sales Agents:\n\n" + "\n".join(products)
+            return "Shopilots offers the following products and solutions:\n\n" + "\n".join(products)
+    
+    # Extract Industry Solutions specifically
+    elif any(word in query_lower for word in ["industry", "solution", "vertical", "sector", "category"]):
+        solutions = []
+        
+        if "electronics" in all_text or "tech" in all_text or "gaming" in all_text:
+            solutions.append("• Electronics & Tech - Smart product comparisons, technical specification matching, compatibility checking, performance recommendations. Results: +53% conversion rate, +41% AOV")
+        if "fashion" in all_text or "apparel" in all_text or "clothing" in all_text:
+            solutions.append("• Fashion & Apparel - Style matching, size and fit guidance, seasonal trend advice, outfit coordination. Results: +49% conversion rate, +32% AOV")
+        if "home" in all_text or "garden" in all_text or "bedding" in all_text or "decor" in all_text:
+            solutions.append("• Home & Garden - Room design consultation, appliance recommendations, space optimization, maintenance guidance. Results: +47% conversion rate, +38% AOV")
+        if "agency" in all_text or "partner" in all_text or "white-label" in all_text:
+            solutions.append("• Agencies & Partners - Multi-client management, custom branding, analytics and reporting, agency partner support")
+        
+        if solutions:
+            return "Shopilots provides industry-specific solutions:\n\n" + "\n".join(solutions)
     
     # Extract platforms
-    elif any(word in query_lower for word in ["platform", "integrate", "shopify", "woocommerce", "supported"]):
+    elif any(word in query_lower for word in ["platform", "integrate", "shopify", "woocommerce", "supported", "integration"]):
         platforms = []
         
+        # E-commerce Platforms
         if "shopify" in all_text:
             platforms.append("• Shopify")
         if "woocommerce" in all_text:
             platforms.append("• WooCommerce")
         if "magento" in all_text:
             platforms.append("• Magento")
+        
+        # Social Media & Messaging
         if "whatsapp" in all_text or "messenger" in all_text:
             platforms.append("• WhatsApp & Messenger")
+        if "telegram" in all_text:
+            platforms.append("• Telegram")
+        if "facebook" in all_text:
+            platforms.append("• Facebook")
+        
+        # AI Platforms
+        if "chatgpt" in all_text or "gpt store" in all_text:
+            platforms.append("• ChatGPT & GPT Store")
         
         if platforms:
             return "Shopilots integrates with:\n\n" + "\n".join(platforms)
     
     # Extract pricing
-    elif any(word in query_lower for word in ["price", "pricing", "plan", "cost"]):
+    elif any(word in query_lower for word in ["price", "pricing", "plan", "cost", "subscription"]):
         return "Shopilots offers:\n\n• Performance Plan - Free to start (up to 500 conversations/month)\n• Business Plan - $299/month (up to 5,000 conversations/month)\n• Enterprise Plan - Custom pricing (unlimited conversations, dedicated support)"
+    
+    # Extract features
+    elif any(word in query_lower for word in ["feature", "capability", "advantage", "benefit"]):
+        features = []
+        
+        if "catalog" in all_text or "integration" in all_text:
+            features.append("• Real-time catalog integration")
+        if "sales" in all_text or "conversion" in all_text:
+            features.append("• Sales-focused conversations")
+        if "channel" in all_text or "multi-channel" in all_text:
+            features.append("• Multi-channel deployment")
+        if "analytics" in all_text:
+            features.append("• Revenue-driven analytics")
+        if "voice" in all_text or "brand" in all_text:
+            features.append("• Brand voice customization")
+        if "checkout" in all_text:
+            features.append("• Fast checkout integration")
+        if "booking" in all_text or "appointment" in all_text:
+            features.append("• Booking appointment feature")
+        
+        if features:
+            return "Shopilots key features:\n\n" + "\n".join(features)
     
     # Default: clean and return relevant content
     content = docs[0].page_content.strip()
@@ -231,6 +339,64 @@ async def keep_alive_ping():
 async def health_check():
     """Health check endpoint to keep service alive"""
     return {"status": "ok", "service": "shopilots-chatbot"}
+
+@app.get("/api/analytics/kpis")
+async def get_kpis():
+    """Get key performance indicators"""
+    return analytics_tracker.get_kpis()
+
+@app.get("/api/analytics/top-questions")
+async def get_top_questions(limit: int = 10):
+    """Get most common questions"""
+    return {"questions": analytics_tracker.get_top_questions(limit)}
+
+@app.get("/api/analytics/hourly-stats")
+async def get_hourly_stats(hours: int = 24):
+    """Get hourly statistics"""
+    return {"stats": analytics_tracker.get_hourly_stats(hours)}
+
+@app.get("/api/analytics/model-usage")
+async def get_model_usage():
+    """Get model usage statistics"""
+    return analytics_tracker.get_model_usage_stats()
+
+@app.get("/api/analytics/product-categories")
+async def get_product_categories():
+    """Get product category statistics"""
+    return analytics_tracker.get_product_category_stats()
+
+@app.get("/api/analytics/fallback-reasons")
+async def get_fallback_reasons():
+    """Get fallback reason statistics"""
+    return analytics_tracker.get_fallback_reasons()
+
+@app.get("/api/analytics/recent-events")
+async def get_recent_events(limit: int = 100):
+    """Get recent conversation events"""
+    return {"events": analytics_tracker.get_recent_events(limit)}
+
+@app.get("/api/analytics/session/{session_id}")
+async def get_session_stats(session_id: str):
+    """Get statistics for a specific session"""
+    stats = analytics_tracker.get_session_stats(session_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return stats
+
+@app.get("/api/analytics/export")
+async def export_analytics(format: str = "json"):
+    """Export analytics data"""
+    if format not in ["json", "csv"]:
+        raise HTTPException(status_code=400, detail="Format must be 'json' or 'csv'")
+    
+    data = analytics_tracker.export_events(format)
+    if format == "json":
+        return {"data": json.loads(data)}
+    else:
+        from fastapi.responses import Response
+        return Response(content=data, media_type="text/csv", headers={
+            "Content-Disposition": "attachment; filename=analytics.csv"
+        })
 
 @app.on_event("startup")
 async def startup_event():
@@ -455,12 +621,19 @@ Your task is to provide accurate, helpful, and complete answers based ONLY on th
 
 CRITICAL INSTRUCTIONS:
 1. Read the entire context carefully before answering
-2. For product questions, mention ALL relevant AI Sales Agents:
+2. For product questions, mention ALL relevant categories:
+   AI Sales Agents:
    - Website Agent
    - Social Media Agent  
    - Messenger Agent
    - Call Agent
    - GPT Store
+   
+   Industry Solutions:
+   - Electronics & Tech (+53% conversion rate, +41% AOV)
+   - Fashion & Apparel (+49% conversion rate, +32% AOV)
+   - Home & Garden (+47% conversion rate, +38% AOV)
+   - Agencies & Partners
 3. Include key features and benefits when discussing products
 4. Be specific and include details like conversion rates, AOV improvements when mentioned in context
 5. Format lists clearly using bullet points
@@ -530,19 +703,98 @@ Provide a clear, complete answer based on the context above:"""
 @app.post("/api/chat/stream")
 async def chat_stream_post(request: ChatRequest):
     """Streaming chat endpoint (POST)"""
+    start_time = time.time()
+    session_id = request.session_id or "default"
+    
+    # Track question event
+    analytics_tracker.track_event(ConversationEvent(
+        timestamp=datetime.now().isoformat(),
+        session_id=session_id,
+        event_type='question',
+        question=request.question,
+    ))
+    
     if not index:
+        analytics_tracker.track_event(ConversationEvent(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            event_type='error',
+            question=request.question,
+            error='Vector database not initialized'
+        ))
         async def error_stream():
             yield f"data: {json.dumps({'error': 'Vector database not initialized'})}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
     
     try:
-        docs, _ = retrieve_docs(request.question, k=4)
+        docs, sources = retrieve_docs(request.question, k=4)
         if not docs and "product" in request.question.lower():
-            docs, _ = retrieve_docs("shopilots AI sales agents products", k=3)
+            docs, sources = retrieve_docs("shopilots AI sales agents products", k=3)
+        
+        # Track fallback if no docs found
+        if not docs:
+            analytics_tracker.track_event(ConversationEvent(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                event_type='fallback',
+                question=request.question,
+                error='No relevant documents found',
+                docs_retrieved=0
+            ))
+        
+        # Wrap the generator to track response time and answer
+        async def tracked_stream():
+            answer_chunks = []
+            model_used = "openai" if use_openai else "llama-3.2-3b"
+            
+            try:
+                # generate_streaming_response is a regular generator, not async
+                for chunk in generate_streaming_response(request.question, docs):
+                    if chunk.startswith('data: '):
+                        data = chunk[6:].strip()
+                        if data and data != '[DONE]':
+                            try:
+                                parsed = json.loads(data)
+                                if parsed.get('token'):
+                                    answer_chunks.append(parsed['token'])
+                            except:
+                                pass
+                    yield chunk
+                
+                # Track answer event
+                response_time_ms = (time.time() - start_time) * 1000
+                full_answer = ''.join(answer_chunks)
+                detected_category = detect_product_category(request.question, full_answer)
+                
+                analytics_tracker.track_event(ConversationEvent(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    event_type='answer',
+                    question=request.question,
+                    answer=full_answer[:500],  # Store first 500 chars
+                    response_time_ms=response_time_ms,
+                    docs_retrieved=len(docs),
+                    sources=sources[:3] if sources else None,
+                    model_used=model_used,
+                    answer_length=len(full_answer),
+                    product_category=detected_category
+                ))
+            except Exception as e:
+                response_time_ms = (time.time() - start_time) * 1000
+                analytics_tracker.track_event(ConversationEvent(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    event_type='error',
+                    question=request.question,
+                    error=str(e),
+                    response_time_ms=response_time_ms
+                ))
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                yield "data: [DONE]\n\n"
         
         return StreamingResponse(
-            generate_streaming_response(request.question, docs),
+            tracked_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -552,6 +804,15 @@ async def chat_stream_post(request: ChatRequest):
             }
         )
     except Exception as e:
+        response_time_ms = (time.time() - start_time) * 1000
+        analytics_tracker.track_event(ConversationEvent(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            event_type='error',
+            question=request.question,
+            error=str(e),
+            response_time_ms=response_time_ms
+        ))
         async def error_stream():
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "data: [DONE]\n\n"
@@ -559,7 +820,25 @@ async def chat_stream_post(request: ChatRequest):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    start_time = time.time()
+    session_id = request.session_id or "default"
+    
+    # Track question event
+    analytics_tracker.track_event(ConversationEvent(
+        timestamp=datetime.now().isoformat(),
+        session_id=session_id,
+        event_type='question',
+        question=request.question,
+    ))
+    
     if not index:
+        analytics_tracker.track_event(ConversationEvent(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            event_type='error',
+            question=request.question,
+            error='Vector database not initialized'
+        ))
         raise HTTPException(status_code=500, detail="Vector database not initialized")
     
     try:
@@ -568,6 +847,20 @@ async def chat(request: ChatRequest):
         # Ensure we have docs - if not, try product-specific search
         if not docs and "product" in request.question.lower():
             docs, sources = retrieve_docs("shopilots AI sales agents products", k=3)
+        
+        # Track fallback if no docs found
+        if not docs:
+            analytics_tracker.track_event(ConversationEvent(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                event_type='fallback',
+                question=request.question,
+                error='No relevant documents found',
+                docs_retrieved=0
+            ))
+        
+        model_used = None
+        answer = None
         
         # Always use LLM for better responses when available
         if components_loaded and llm and docs:
@@ -583,12 +876,19 @@ Your task is to provide accurate, helpful, and complete answers based ONLY on th
 
 CRITICAL INSTRUCTIONS:
 1. Read the entire context carefully before answering
-2. For product questions, mention ALL relevant AI Sales Agents:
+2. For product questions, mention ALL relevant categories:
+   AI Sales Agents:
    - Website Agent
    - Social Media Agent  
    - Messenger Agent
    - Call Agent
    - GPT Store
+   
+   Industry Solutions:
+   - Electronics & Tech (+53% conversion rate, +41% AOV)
+   - Fashion & Apparel (+49% conversion rate, +32% AOV)
+   - Home & Garden (+47% conversion rate, +38% AOV)
+   - Agencies & Partners
 3. Include key features and benefits when discussing products
 4. Be specific and include details like conversion rates, AOV improvements when mentioned in context
 5. Format lists clearly using bullet points
@@ -603,6 +903,7 @@ Customer Question: {request.question}
 
 Provide a clear, complete answer based on the context above:"""
                 
+                model_used = "llama-3.2-3b"
                 answer = llm.generate_answer(enhanced_prompt, max_new_tokens=350)
                 
                 answer = answer.strip()
@@ -627,22 +928,91 @@ Provide a clear, complete answer based on the context above:"""
                 
                 if answer and len(answer) > 20:
                     chat_history.append(f"question: {request.question}, answer: {answer}")
+                    response_time_ms = (time.time() - start_time) * 1000
+                    detected_category = detect_product_category(request.question, answer)
+                    
+                    # Track answer event
+                    analytics_tracker.track_event(ConversationEvent(
+                        timestamp=datetime.now().isoformat(),
+                        session_id=session_id,
+                        event_type='answer',
+                        question=request.question,
+                        answer=answer[:500],
+                        response_time_ms=response_time_ms,
+                        docs_retrieved=len(docs),
+                        sources=sources[:3] if sources else None,
+                        model_used=model_used,
+                        answer_length=len(answer),
+                        product_category=detected_category
+                    ))
+                    
                     return ChatResponse(
                         answer=answer,
                         sources=[{"document": s.get("document", "Unknown"), "score": s.get("score", 0)} for s in sources[:2]]
                     )
             except Exception as e:
                 print(f"LLM error: {e}")
+                analytics_tracker.track_event(ConversationEvent(
+                    timestamp=datetime.now().isoformat(),
+                    session_id=session_id,
+                    event_type='error',
+                    question=request.question,
+                    error=f"LLM error: {str(e)}",
+                    response_time_ms=(time.time() - start_time) * 1000
+                ))
                 pass
         
         # Fallback to formatted response
         answer = format_response(docs, request.question)
+        response_time_ms = (time.time() - start_time) * 1000
+        detected_category = detect_product_category(request.question, answer)
+        
+        # Track fallback response
+        if not model_used:
+            analytics_tracker.track_event(ConversationEvent(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                event_type='fallback',
+                question=request.question,
+                answer=answer[:500],
+                response_time_ms=response_time_ms,
+                docs_retrieved=len(docs) if docs else 0,
+                sources=sources[:3] if sources else None,
+                error='Using formatted response fallback',
+                answer_length=len(answer),
+                product_category=detected_category
+            ))
+        else:
+            # Track answer even if it's short
+            analytics_tracker.track_event(ConversationEvent(
+                timestamp=datetime.now().isoformat(),
+                session_id=session_id,
+                event_type='answer',
+                question=request.question,
+                answer=answer[:500],
+                response_time_ms=response_time_ms,
+                docs_retrieved=len(docs) if docs else 0,
+                sources=sources[:3] if sources else None,
+                model_used=model_used or "formatted",
+                answer_length=len(answer),
+                product_category=detected_category
+            ))
+        
         return ChatResponse(
             answer=answer,
             sources=[{"document": s.get("document", "Unknown"), "score": s.get("score", 0)} for s in sources[:2]]
         )
             
     except Exception as e:
+        response_time_ms = (time.time() - start_time) * 1000
+        analytics_tracker.track_event(ConversationEvent(
+            timestamp=datetime.now().isoformat(),
+            session_id=session_id,
+            event_type='error',
+            question=request.question,
+            error=str(e),
+            response_time_ms=response_time_ms
+        ))
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
