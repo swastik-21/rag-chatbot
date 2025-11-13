@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 # Only apply nest_asyncio if not using uvloop (uvloop doesn't support patching)
 # On Render and other platforms that use uvloop, this will fail gracefully
 try:
-nest_asyncio.apply()
+    nest_asyncio.apply()
 except ValueError as e:
     # If it fails due to uvloop (e.g., "Can't patch loop of type <class 'uvloop.Loop'>"),
     # that's okay - we don't need nest_asyncio with uvloop since uvloop handles nested event loops natively
