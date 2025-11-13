@@ -23,8 +23,20 @@ class Chroma:
         collection_metadata: dict | None = None,
         is_persistent: bool = True,
     ) -> None:
-        client_settings = chromadb.config.Settings(is_persistent=is_persistent)
+        # Optimize ChromaDB settings for memory on cloud
+        import os as _os
+        is_cloud = _os.getenv("RENDER") or _os.getenv("RAILWAY_ENVIRONMENT") or _os.getenv("RENDER_EXTERNAL_URL")
+        
+        client_settings = chromadb.config.Settings(
+            is_persistent=is_persistent,
+            anonymized_telemetry=False,  # Disable telemetry to save memory
+        )
         client_settings.persist_directory = persist_directory
+        
+        # Reduce memory usage on cloud
+        if is_cloud:
+            # Use minimal settings
+            client_settings.allow_reset = False
 
         if client is not None:
             self.client = client

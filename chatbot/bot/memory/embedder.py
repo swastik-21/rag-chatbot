@@ -11,6 +11,15 @@ class Embedder:
         Args:
             **kwargs (Any): Additional keyword arguments to pass to the SentenceTransformer model.
         """
+        # Optimize for memory on cloud deployments
+        import os as _os
+        is_cloud = _os.getenv("RENDER") or _os.getenv("RAILWAY_ENVIRONMENT") or _os.getenv("RENDER_EXTERNAL_URL")
+        
+        if is_cloud:
+            # Use CPU only and disable progress bars to save memory
+            kwargs.setdefault("device", "cpu")
+            kwargs.setdefault("model_kwargs", {"low_cpu_mem_usage": True})
+        
         self.client = sentence_transformers.SentenceTransformer(model_name, cache_folder=cache_folder, **kwargs)
 
     def embed_documents(self, texts: list[str], multi_process: bool = False, **encode_kwargs: Any) -> list[list[float]]:
@@ -32,7 +41,11 @@ class Embedder:
             embeddings = self.client.encode_multi_process(texts, pool)
             sentence_transformers.SentenceTransformer.stop_multi_process_pool(pool)
         else:
-            embeddings = self.client.encode(texts, show_progress_bar=True, **encode_kwargs)
+            # Disable progress bar on cloud to save memory
+            import os as _os
+            is_cloud = _os.getenv("RENDER") or _os.getenv("RAILWAY_ENVIRONMENT") or _os.getenv("RENDER_EXTERNAL_URL")
+            show_progress = not is_cloud
+            embeddings = self.client.encode(texts, show_progress_bar=show_progress, **encode_kwargs)
 
         return embeddings.tolist()
 

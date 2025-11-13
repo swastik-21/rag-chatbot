@@ -10,6 +10,16 @@ from typing import Optional, List
 import asyncio
 import httpx
 import time
+import gc
+import os
+
+# Optimize Python memory settings for cloud deployments
+if os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER_EXTERNAL_URL"):
+    # Force garbage collection before loading heavy models
+    gc.collect()
+    # Set environment variables to reduce memory usage
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Disable tokenizer parallelism to save memory
 
 sys.path.insert(0, str(Path(__file__).parent / "chatbot"))
 
@@ -62,8 +72,25 @@ def initialize_components():
     is_cloud = os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER_EXTERNAL_URL")
     
     try:
+        # Initialize ChromaDB first (lighter)
+        # We'll load the embedding model lazily if needed, but for now load it
+        # since we need it for queries
+        print("Initializing embedding model...")
         embedding = Embedder()
+        print("Embedding model loaded")
+        
+        # Force garbage collection after loading embedding model
+        if is_cloud:
+            gc.collect()
+        
+        print("Initializing vector database...")
+        # Initialize ChromaDB with memory optimizations
         index = Chroma(persist_directory=str(vector_store_path), embedding=embedding)
+        print("Vector database initialized")
+        
+        # Force garbage collection after loading vector database
+        if is_cloud:
+            gc.collect()
         
         # Always prioritize OpenAI on cloud deployments to save memory
         api_key = os.getenv("OPENAI_API_KEY")
