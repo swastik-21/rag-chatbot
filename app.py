@@ -187,6 +187,9 @@ def detect_product_category(question: str, answer: str = "") -> Optional[str]:
     return None
 
 def retrieve_docs(query: str, k: int = 5):
+    if index is None:
+        return [], []
+    
     results = []
     sources_list = []
     
@@ -708,6 +711,19 @@ Provide a clear, complete answer based on the context above:"""
                     max_tokens=500
                 )
                 
+                # Try to get first chunk to validate the stream
+                first_chunk = next(stream, None)
+                if first_chunk is None:
+                    raise Exception("Empty stream from OpenAI")
+                
+                # Process first chunk
+                if first_chunk.choices and len(first_chunk.choices) > 0:
+                    delta = first_chunk.choices[0].delta
+                    if delta and hasattr(delta, 'content') and delta.content:
+                        token = delta.content
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+                
+                # Process remaining chunks
                 for chunk in stream:
                     try:
                         if chunk.choices and len(chunk.choices) > 0:
@@ -722,8 +738,10 @@ Provide a clear, complete answer based on the context above:"""
                 return
             except Exception as openai_error:
                 # Fallback to format_response if OpenAI fails
-                print(f"OpenAI API error: {openai_error}, falling back to format_response")
-                answer = format_response(docs, question)
+                error_msg = str(openai_error)
+                print(f"OpenAI API error: {error_msg}, falling back to format_response")
+                # Don't yield error, just fallback silently
+                answer = format_response(docs, question) if docs else "I couldn't find specific information about that."
                 for i in range(0, len(answer), 5):
                     yield f"data: {json.dumps({'token': answer[i:i+5]})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -806,16 +824,21 @@ async def chat_stream_post(request: ChatRequest):
             try:
                 # generate_streaming_response is an async generator
                 async for chunk in generate_streaming_response(request.question, docs):
-                    if chunk.startswith('data: '):
-                        data = chunk[6:].strip()
-                        if data and data != '[DONE]':
-                            try:
-                                parsed = json.loads(data)
-                                if parsed.get('token'):
-                                    answer_chunks.append(parsed['token'])
-                            except:
-                                pass
-                    yield chunk
+                    try:
+                        if chunk.startswith('data: '):
+                            data = chunk[6:].strip()
+                            if data and data != '[DONE]':
+                                try:
+                                    parsed = json.loads(data)
+                                    if parsed.get('token'):
+                                        answer_chunks.append(parsed['token'])
+                                except:
+                                    pass
+                        yield chunk
+                    except Exception as chunk_error:
+                        print(f"Error yielding chunk: {chunk_error}")
+                        yield f"data: {json.dumps({'error': str(chunk_error)})}\n\n"
+                        break
                 
                 # Track answer event
                 response_time_ms = (time.time() - start_time) * 1000
@@ -860,16 +883,17 @@ async def chat_stream_post(request: ChatRequest):
         )
     except Exception as e:
         response_time_ms = (time.time() - start_time) * 1000
+        error_message = str(e)
         analytics_tracker.track_event(ConversationEvent(
             timestamp=datetime.now().isoformat(),
             session_id=session_id,
             event_type='error',
             question=request.question,
-            error=str(e),
+            error=error_message,
             response_time_ms=response_time_ms
         ))
         async def error_stream():
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': error_message})}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
